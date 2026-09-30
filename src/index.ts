@@ -1,60 +1,78 @@
 import TelegramBot from 'node-telegram-bot-api';
-import express from 'express';
+import axios from 'axios';
+import http from 'http';
 
-// Ambil token dari Environment Variable
-const token = process.env.TELEGRAM_TOKEN || '';
-
-if (!token) {
-  console.error('ERROR: TELEGRAM_TOKEN belum diatur!');
+// Interface untuk tipe data respons API
+interface CekRekeningResponse {
+  account_name?: string;
+  account_number?: string;
+  bank_code?: string;
 }
 
-// Inisialisasi Bot dengan Polling
-const bot = new TelegramBot(token, { polling: true });
-
-// Server dummy Express agar Render tetap menganggap Web Service ini aktif
-const app = express();
+// 1. HTTP Server sederhana agar Render Web Service tetap aktif (tidak perlu express)
 const PORT = process.env.PORT || 10000;
-
-app.get('/', (req, res) => {
-  res.send('Bot Cek Rekening sedang berjalan...');
-});
-
-app.listen(PORT, () => {
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot Cek Rekening Aktif!\n');
+}).listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });
 
-// Response saat user mengetik /start
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
+// 2. Inisialisasi Bot Telegram
+const TELEGRAM_TOKEN: string = process.env.TELEGRAM_TOKEN || '';
+
+if (!TELEGRAM_TOKEN) {
+  console.error('ERROR: TELEGRAM_TOKEN belum diatur di Environment Variables Render!');
+}
+
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+
+// Command /start
+bot.onText(/\/start/, (msg: TelegramBot.Message) => {
   bot.sendMessage(
-    chatId,
-    'Halo! Bot Cek Rekening aktif.\n\nGunakan format berikut untuk mengecek:\n`/cek <nama_bank> <nomor_rekening>`\n\nContoh:\n`/cek bri 667301035776536`',
+    msg.chat.id,
+    ' Selamat datang! Bot Cek Rekening Siap Digunakan.\n\n' +
+    'Gunakan format:\n' +
+    '`/cek [nama_bank] [nomor_rekening]`\n\n' +
+    'Contoh:\n' +
+    '`/cek bca 1234567890`',
     { parse_mode: 'Markdown' }
   );
 });
 
-// Response saat user mengetik /cek ...
-bot.onText(/\/cek (.+)/, async (msg, match) => {
+// Command /cek bank norek
+bot.onText(/\/cek (.+) (.+)/, async (msg: TelegramBot.Message, match: RegExpExecArray | null) => {
   const chatId = msg.chat.id;
-  const input = match ? match[1] : '';
-  const args = input.trim().split(/\s+/);
+  if (!match) return;
 
-  if (args.length < 2) {
-    bot.sendMessage(chatId, 'Format salah! Gunakan: `/cek <nama_bank> <nomor_rekening>`', { parse_mode: 'Markdown' });
-    return;
+  const bank: string = match[1].toLowerCase().trim();
+  const accountNo: string = match[2].trim();
+
+  bot.sendMessage(chatId, '🔍 Sedang mengecek data...');
+
+  try {
+    const response = await axios.get<CekRekeningResponse>(
+      `https://cekrekening.github.io/api/account?bank=${bank}&accountNumber=${accountNo}`
+    );
+    const data = response.data;
+
+    if (data && data.account_name) {
+      const reply = `*HASIL CEK REKENING*\n\n` +
+                    ` Bank: ${bank.toUpperCase()}\n` +
+                    ` No. Rekening: ${accountNo}\n` +
+                    ` Nama Pemilik: *${data.account_name}*`;
+      bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
+    } else {
+      bot.sendMessage(chatId, ' Rekening tidak ditemukan atau kombinasi bank/rekening salah.');
+    }
+  } catch (error) {
+    bot.sendMessage(chatId, ' Gagal mengambil data. Pastikan nama bank dan nomor rekening valid.');
   }
-
-  const bank = args[0].toLowerCase();
-  const norek = args[1];
-
-  bot.sendMessage(chatId, `🔍 Sedang mengecek rekening *${bank.toUpperCase()}* dengan nomor *${norek}*...`, { parse_mode: 'Markdown' });
-
-  // Panggil API cek rekening di sini
 });
 
-// Tangkap error polling agar bot tidak berhenti silent/crash
+// Tangkap polling error
 bot.on('polling_error', (error) => {
   console.error('Polling error:', error);
 });
 
-console.log('Bot Telegram berhasil dinyalakan...');
+console.log('Bot Telegram Berjalan...');
